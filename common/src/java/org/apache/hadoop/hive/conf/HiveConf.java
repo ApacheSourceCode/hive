@@ -3256,6 +3256,9 @@ public class HiveConf extends Configuration {
 
     TRANSACTIONAL_CONCATENATE_NOBLOCK("hive.transactional.concatenate.noblock", false,
         "Will cause 'alter table T concatenate' to be non-blocking"),
+    CONCATENATE_EXTERNAL_TABLE("hive.concatenate.external.table", false,
+        "Enable concatenate for external tables. This allows 'alter table `tablename` concatenate' " +
+            "on external tables."),
 
     HIVE_COMPACTOR_COMPACT_MM("hive.compactor.compact.insert.only", true,
         "Whether the compactor should compact insert-only tables. A safety switch."),
@@ -5592,6 +5595,10 @@ public class HiveConf extends Configuration {
 
     HIVE_SERVER2_ICEBERG_METADATA_GENERATOR_THREADS("hive.server2.iceberg.metadata.generator.threads", 10,
         "Number of threads used to scan partition directories for data files and update/generate iceberg metadata"),
+
+    HIVE_ICEBERG_METADATA_REFRESH_MAX_RETRIES("hive.iceberg.metadata.refresh.max.retries", 2,
+        "Max retry count for trying to access the metadata location in order to refresh metadata during " +
+         " Iceberg table load."),
 
     /* BLOBSTORE section */
 
