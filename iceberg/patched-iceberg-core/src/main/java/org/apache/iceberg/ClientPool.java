@@ -17,28 +17,14 @@
  * under the License.
  */
 
-package org.apache.iceberg.mr.hive;
+package org.apache.iceberg;
 
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.Map;
-import org.apache.iceberg.mr.Catalogs;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
-import org.junit.Assert;
-import org.junit.Test;
-
-public class TestHiveIcebergStorageHandler {
-
-  @Test
-  public void testAuthzURI() throws URISyntaxException {
-    Map<String, String> props = ImmutableMap.of(
-        Catalogs.LOCATION, "hdfs://abcd/汉字123/"
-    );
-
-    HiveIcebergStorageHandler storageHandler = new HiveIcebergStorageHandler();
-    URI uriForAuth = storageHandler.getURIForAuth(props);
-
-    Assert.assertEquals("iceberg://hdfs://abcd/汉字123/", uriForAuth.toString());
+public interface ClientPool<C, E extends Exception> {
+  interface Action<R, C, E extends Exception> {
+    R run(C client) throws E;
   }
 
+  <R> R run(Action<R, C, E> action) throws E, InterruptedException;
+
+  <R> R run(Action<R, C, E> action, boolean retry) throws E, InterruptedException;
 }
