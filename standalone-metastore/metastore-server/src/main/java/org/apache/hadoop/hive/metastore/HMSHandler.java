@@ -991,7 +991,6 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
   public void shutdown() {
     cleanupRawStore();
     PerfLogger.getPerfLogger(false).cleanupPerfLogMetrics();
-    ThreadPool.shutdown();
   }
 
   @Override
@@ -2334,6 +2333,11 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
     if (db != null && db.getType().equals(DatabaseType.REMOTE)) {
       // HIVE-24425: Create table in REMOTE db should fail
       throw new MetaException("Create table in REMOTE database " + db.getName() + " is not allowed");
+    }
+
+    if (is_table_exists(ms, tbl.getCatName(), tbl.getDbName(), tbl.getTableName())) {
+      throw new AlreadyExistsException("Table " + getCatalogQualifiedTableName(tbl)
+          + " already exists");
     }
 
     if (transformer != null) {
