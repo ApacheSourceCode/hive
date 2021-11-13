@@ -287,6 +287,9 @@ public class ObjectStore implements RawStore, Configurable {
   */
   private final static AtomicBoolean isSchemaVerified = new AtomicBoolean(false);
   private static final Logger LOG = LoggerFactory.getLogger(ObjectStore.class);
+  private int RM_PROGRESS_COL_WIDTH = 10000;
+  private int RM_METADATA_COL_WIDTH = 4000;
+  private int ORACLE_DB_MAX_COL_WIDTH = 4000;
 
   private enum TXN_STATUS {
     NO_STATE, OPEN, COMMITED, ROLLBACK
@@ -14172,12 +14175,13 @@ public class ObjectStore implements RawStore, Configurable {
   @Override
   public ScheduledQueryPollResponse scheduledQueryPoll(ScheduledQueryPollRequest request) throws MetaException {
     ensureScheduledQueriesEnabled();
-    String namespace = request.getClusterNamespace();
     boolean commited = false;
     ScheduledQueryPollResponse ret = new ScheduledQueryPollResponse();
-    try (QueryWrapper q = new QueryWrapper(pm.newQuery(MScheduledQuery.class,
-        "nextExecution <= now && enabled && clusterNamespace == ns && activeExecution == null"))) {
+    Query q = null;
+    try {
       openTransaction();
+      q = pm.newQuery(MScheduledQuery.class,
+          "nextExecution <= now && enabled && clusterNamespace == ns && activeExecution == null");
       q.setSerializeRead(true);
       q.declareParameters("java.lang.Integer now, java.lang.String ns");
       q.setOrdering("nextExecution");
@@ -14187,7 +14191,6 @@ public class ObjectStore implements RawStore, Configurable {
         return new ScheduledQueryPollResponse();
       }
       MScheduledQuery schq = results.get(0);
-      Integer plannedExecutionTime = schq.getNextExecution();
       schq.setNextExecution(computeNextExecutionTime(schq.getSchedule()));
 
       MScheduledExecution execution = new MScheduledExecution();
@@ -14209,12 +14212,8 @@ public class ObjectStore implements RawStore, Configurable {
       LOG.debug("Caught jdo exception; exclusive", e);
       commited = false;
     } finally {
-      if (commited) {
-        return ret;
-      } else {
-        rollbackTransaction();
-        return new ScheduledQueryPollResponse();
-      }
+      rollbackAndCleanup(commited, q);
+      return commited ? ret : new ScheduledQueryPollResponse();
     }
   }
 
@@ -14364,17 +14363,22 @@ public class ObjectStore implements RawStore, Configurable {
           mReplicationMetrics.setStartTime((int) (System.currentTimeMillis()/1000));
         }
         if (!StringUtils.isEmpty(replicationMetric.getMetadata())) {
-          mReplicationMetrics.setMetadata(replicationMetric.getMetadata());
+          if (replicationMetric.getMetadata().length() > RM_METADATA_COL_WIDTH) {
+            mReplicationMetrics.setProgress("RM_Metadata limit exceeded to " + replicationMetric.getMetadata().length());
+          } else {
+            mReplicationMetrics.setMetadata(replicationMetric.getMetadata());
+          }
         }
         if (!StringUtils.isEmpty(replicationMetric.getProgress())) {
           // Check for the limit of RM_PROGRESS Column.
-          if ((dbType.isORACLE() && replicationMetric.getProgress().length() > 4000)
-              || replicationMetric.getProgress().length() > 24000) {
-            mReplicationMetrics.setProgress("RM_PROGRESS LIMIT EXCEEDED");
+          if ((dbType.isORACLE() && replicationMetric.getProgress().length() > ORACLE_DB_MAX_COL_WIDTH)
+              || replicationMetric.getProgress().length() > RM_PROGRESS_COL_WIDTH) {
+            mReplicationMetrics.setProgress("RM_Progress limit exceeded to " + replicationMetric.getProgress().length());
           } else {
             mReplicationMetrics.setProgress(replicationMetric.getProgress());
           }
         }
+        mReplicationMetrics.setMessageFormat(replicationMetric.getMessageFormat());
         mReplicationMetricsList.add(mReplicationMetrics);
       }
       pm.makePersistentAll(mReplicationMetricsList);

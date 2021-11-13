@@ -680,6 +680,9 @@ public class MetastoreConf {
     DIRECT_SQL_MAX_ELEMENTS_VALUES_CLAUSE("metastore.direct.sql.max.elements.values.clause",
         "hive.direct.sql.max.elements.values.clause",
         1000, "The maximum number of values in a VALUES clause for INSERT statement."),
+    DIRECT_SQL_MAX_PARAMETERS("metastore.direct.sql.max.parameters",
+        "hive.direct.sql.max.parameters", 1000, "The maximum query parameters \n" +
+            "backend sql engine can support."),
     DIRECT_SQL_MAX_QUERY_LENGTH("metastore.direct.sql.max.query.length",
         "hive.direct.sql.max.query.length", 100, "The maximum\n" +
         " size of a query string (in KB)."),
@@ -727,6 +730,10 @@ public class MetastoreConf {
         "hive.metastore.event.message.factory",
         "org.apache.hadoop.hive.metastore.messaging.json.gzip.GzipJSONMessageEncoder",
         "Factory class for making encoding and decoding messages in the events generated."),
+    REPL_MESSAGE_FACTORY("metastore.repl.message.factory",
+            "hive.metastore.repl.message.factory",
+            "org.apache.hadoop.hive.metastore.messaging.json.gzip.GzipJSONMessageEncoder",
+            "Factory class to serialize and deserialize information in replication metrics table."),
     EVENT_NOTIFICATION_PARAMETERS_EXCLUDE_PATTERNS("metastore.notification.parameters.exclude.patterns",
         "hive.metastore.notification.parameters.exclude.patterns", "",
         "List of comma-separated regexes that are used to reduced the size of HMS Notification messages."
