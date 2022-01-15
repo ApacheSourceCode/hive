@@ -77,7 +77,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-
 /**
  * Hive Configuration.
  */
@@ -3066,6 +3065,10 @@ public class HiveConf extends Configuration {
 
     HIVE_ACID_LOCKLESS_READS_ENABLED("hive.acid.lockless.reads.enabled", false,
         "Enables lockless reads"),
+     
+    HIVE_ACID_CREATE_TABLE_USE_SUFFIX("hive.acid.createtable.softdelete", false,
+        "Enables non-blocking DROP TABLE operation.\n" +
+        "If enabled, every table directory would be suffixed with the corresponding table creation txnId."),
     
     HIVE_ACID_TRUNCATE_USE_BASE("hive.acid.truncate.usebase", false,
         "If enabled, truncate for transactional tables will not delete the data directories,\n" +
@@ -3257,10 +3260,22 @@ public class HiveConf extends Configuration {
     HIVE_COMPACTOR_WAIT_TIMEOUT("hive.compactor.wait.timeout", 300000L, "Time out in "
         + "milliseconds for blocking compaction. It's value has to be higher than 2000 milliseconds. "),
 
-    HIVE_MR_COMPACTOR_GATHER_STATS("hive.mr.compactor.gather.stats", true, "If set to true MAJOR compaction " +
+    /**
+     * @deprecated This config value is honoured by the MR based compaction only.
+     * Use the {@link HiveConf.ConfVars#HIVE_COMPACTOR_GATHER_STATS}
+     * config instead which is honoured by both the MR and Query based compaction.
+     */
+    @Deprecated
+    HIVE_MR_COMPACTOR_GATHER_STATS("hive.mr.compactor.gather.stats", false, "If set to true MAJOR compaction " +
         "will gather stats if there are stats already associated with the table/partition.\n" +
         "Turn this off to save some resources and the stats are not used anyway.\n" +
         "Works only for MR based compaction, CRUD based compaction uses hive.stats.autogather."),
+
+    HIVE_COMPACTOR_GATHER_STATS("hive.compactor.gather.stats", true, "If set to true MAJOR compaction " +
+            "will gather stats if there are stats already associated with the table/partition.\n" +
+            "Turn this off to save some resources and the stats are not used anyway.\n" +
+            "This is a replacement for the HIVE_MR_COMPACTOR_GATHER_STATS config, and works both for MR and Query based " +
+            "compaction."),
 
     /**
      * @deprecated Use MetastoreConf.COMPACTOR_INITIATOR_FAILED_THRESHOLD
@@ -4348,7 +4363,7 @@ public class HiveConf extends Configuration {
     HIVE_SERVER2_JOB_CREDENTIAL_PROVIDER_PATH("hive.server2.job.credential.provider.path", "",
         "If set, this configuration property should provide a comma-separated list of URLs that indicates the type and " +
         "location of providers to be used by hadoop credential provider API. It provides HiveServer2 the ability to provide job-specific " +
-        "credential providers for jobs run using MR and Spark execution engines. This functionality has not been tested against Tez."),
+        "credential providers for jobs run using Tez, MR, Spark execution engines."),
     HIVE_MOVE_FILES_THREAD_COUNT("hive.mv.files.thread", 15, new  SizeValidator(0L, true, 1024L, true), "Number of threads"
          + " used to move files in move task. Set it to 0 to disable multi-threaded file moves. This parameter is also used by"
          + " MSCK to check tables."),
