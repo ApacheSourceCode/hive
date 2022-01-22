@@ -355,15 +355,7 @@ public class HiveMetaStoreClient implements IMetaStoreClient, AutoCloseable {
         if (uriResolverHook != null) {
           metastoreURIArray.addAll(uriResolverHook.resolveURI(tmpUri));
         } else {
-          metastoreURIArray.add(new URI(
-                  tmpUri.getScheme(),
-                  tmpUri.getUserInfo(),
-                  HadoopThriftAuthBridge.getBridge().getCanonicalHostName(tmpUri.getHost()),
-                  tmpUri.getPort(),
-                  tmpUri.getPath(),
-                  tmpUri.getQuery(),
-                  tmpUri.getFragment()
-          ));
+          metastoreURIArray.add(tmpUri);
         }
       }
       metastoreUris = new URI[metastoreURIArray.size()];
@@ -4986,6 +4978,17 @@ public class HiveMetaStoreClient implements IMetaStoreClient, AutoCloseable {
   @Override
   public void markFailed(CompactionInfoStruct cr) throws MetaException, TException {
     client.mark_failed(cr);
+  }
+
+  @Override
+  public boolean updateCompactionMetricsData(CompactionMetricsDataStruct struct)
+      throws MetaException, TException {
+    return client.update_compaction_metrics_data(struct);
+  }
+
+  @Override
+  public void removeCompactionMetricsData(CompactionMetricsDataRequest request) throws MetaException, TException {
+    client.remove_compaction_metrics_data(request);
   }
 
   @Override
