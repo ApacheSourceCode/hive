@@ -2351,13 +2351,13 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
     boolean success = false, madeDir = false;
     boolean isReplicated = false;
     try {
-      firePreEvent(new PreCreateTableEvent(tbl, this));
 
       ms.openTransaction();
 
       db = ms.getDatabase(tbl.getCatName(), tbl.getDbName());
       isReplicated = isDbReplicationTarget(db);
 
+      firePreEvent(new PreCreateTableEvent(tbl, db, this));
       // get_table checks whether database exists, it should be moved here
       if (is_table_exists(ms, tbl.getCatName(), tbl.getDbName(), tbl.getTableName())) {
         throw new AlreadyExistsException("Table " + getCatalogQualifiedTableName(tbl)
@@ -5656,6 +5656,15 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
     }
   }
 
+  private void checkLimitNumberOfPartitionsByPs(String catName, String dbName, String tblName,
+                                                List<String> partVals, int maxParts)
+          throws TException {
+    if (isPartitionLimitEnabled()) {
+      checkLimitNumberOfPartitions(tblName, getNumPartitionsByPs(catName, dbName, tblName,
+              partVals), maxParts);
+    }
+  }
+
   private boolean isPartitionLimitEnabled() {
     int partitionLimit = MetastoreConf.getIntVar(conf, ConfVars.LIMIT_PARTITION_REQUEST);
     return partitionLimit > -1;
@@ -5946,7 +5955,7 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
       environmentContext = new EnvironmentContext();
     }
     if (catName == null) {
-      catName = MetaStoreUtils.getDefaultCatalog(conf);
+      catName = getDefaultCatalog(conf);
     }
 
     startTableFunction("alter_partitions", catName, db_name, tbl_name);
@@ -6065,7 +6074,7 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
       envContext = new EnvironmentContext();
     }
     if (catName == null) {
-      catName = MetaStoreUtils.getDefaultCatalog(conf);
+      catName = getDefaultCatalog(conf);
     }
 
     // HIVE-25282: Drop/Alter table in REMOTE db should fail
@@ -6666,6 +6675,8 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
     List<Partition> ret = null;
     Exception ex = null;
     try {
+      checkLimitNumberOfPartitionsByPs(parsedDbName[CAT_NAME], parsedDbName[DB_NAME],
+              tbl_name, part_vals, max_parts);
       authorizeTableForPartitionMetadata(parsedDbName[CAT_NAME], parsedDbName[DB_NAME], tbl_name);
       ret = getMS().listPartitionsPsWithAuth(parsedDbName[CAT_NAME], parsedDbName[DB_NAME],
           tbl_name, part_vals, max_parts, userName, groupNames);
@@ -7420,6 +7431,26 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
       rethrowException(e);
     } finally {
       endFunction("get_num_partitions_by_expr", ret != -1, ex, tblName);
+    }
+    return ret;
+  }
+
+  private int getNumPartitionsByPs(final String catName, final String dbName,
+                                   final String tblName, List<String> partVals)
+          throws TException {
+    String[] parsedDbName = parseDbName(dbName, conf);
+    startTableFunction("getNumPartitionsByPs", parsedDbName[CAT_NAME],
+            parsedDbName[DB_NAME], tblName);
+
+    int ret = -1;
+    Exception ex = null;
+    try {
+      ret = getMS().getNumPartitionsByPs(catName, dbName, tblName, partVals);
+    } catch (Exception e) {
+      ex = e;
+      rethrowException(e);
+    } finally {
+      endFunction("getNumPartitionsByPs", ret != -1, ex, tblName);
     }
     return ret;
   }
@@ -9520,7 +9551,7 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
     ms.openTransaction();
     boolean success = false;
     try {
-      Table tbl = ms.getTable(DEFAULT_CATALOG_NAME, dbName, tblName);
+      Table tbl = ms.getTable(getDefaultCatalog(conf), dbName, tblName);
       if (tbl == null) {
         throw new NoSuchObjectException(dbName + "." + tblName + " not found");
       }
@@ -9545,7 +9576,7 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
         if (partName != null) {
           partNames = Lists.newArrayList(partName);
         } else if (isAllPart) {
-          partNames = ms.listPartitionNames(DEFAULT_CATALOG_NAME, dbName, tblName, (short)-1);
+          partNames = ms.listPartitionNames(getDefaultCatalog(conf), dbName, tblName, (short)-1);
         } else {
           throw new MetaException("Table is partitioned");
         }
@@ -9558,7 +9589,7 @@ public class HMSHandler extends FacebookBase implements IHMSHandler {
           int currentBatchSize = Math.min(batchSize, partNames.size() - index);
           List<String> nameBatch = partNames.subList(index, index + currentBatchSize);
           index += currentBatchSize;
-          List<Partition> parts = ms.getPartitionsByNames(DEFAULT_CATALOG_NAME, dbName, tblName, nameBatch);
+          List<Partition> parts = ms.getPartitionsByNames(getDefaultCatalog(conf), dbName, tblName, nameBatch);
           for (Partition part : parts) {
             if (!part.isSetSd() || !part.getSd().isSetLocation()) {
               throw new MetaException("Partition does not have storage location;" +
