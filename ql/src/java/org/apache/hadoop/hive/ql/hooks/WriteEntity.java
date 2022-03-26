@@ -19,9 +19,11 @@
 package org.apache.hadoop.hive.ql.hooks;
 
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.DataConnector;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.ql.ddl.table.AlterTableType;
+import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.metadata.DummyPartition;
 import org.apache.hadoop.hive.ql.metadata.Partition;
 import org.apache.hadoop.hive.ql.metadata.Table;
@@ -202,7 +204,7 @@ public class WriteEntity extends Entity implements Serializable {
    * @param op Operation type from the alter table description
    * @return the write type this should use.
    */
-  public static WriteType determineAlterTableWriteType(AlterTableType op) {
+  public static WriteType determineAlterTableWriteType(AlterTableType op, Table table, HiveConf conf) {
     switch (op) {
     case RENAME_COLUMN:
     case CLUSTERED_BY:
@@ -222,13 +224,16 @@ public class WriteEntity extends Entity implements Serializable {
     case INTO_BUCKETS:
     case ALTERPARTITION:
     case ADDCOLS:
-    case RENAME:
     case TRUNCATE:
     case MERGEFILES:
     case ADD_CONSTRAINT:
     case DROP_CONSTRAINT:
     case OWNER:
       return WriteType.DDL_EXCLUSIVE;
+
+    case RENAME:
+      return AcidUtils.isLocklessReadsEnabled(table, conf) ? 
+          WriteType.DDL_EXCL_WRITE : WriteType.DDL_EXCLUSIVE;
 
     case ADDPARTITION:
     case SET_SERDE_PROPS:

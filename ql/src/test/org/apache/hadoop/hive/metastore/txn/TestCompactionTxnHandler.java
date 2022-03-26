@@ -45,6 +45,7 @@ import org.apache.hadoop.hive.metastore.api.ShowCompactResponse;
 import org.apache.hadoop.hive.metastore.api.ShowCompactResponseElement;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.utils.TestTxnDbUtil;
+import org.apache.hive.common.util.HiveVersionInfo;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -73,7 +74,7 @@ import static org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars.COMPA
  */
 public class TestCompactionTxnHandler {
 
-  public static final String WORKER_VERSION = "4.0.0-alpha-1";
+  public static final String WORKER_VERSION = HiveVersionInfo.getShortVersion();
   private HiveConf conf = new HiveConf();
   private TxnStore txnHandler;
 
@@ -393,6 +394,16 @@ public class TestCompactionTxnHandler {
     assertNotNull(response);
     assertEquals("Expecting a single record", 1, response.getCompactionsSize());
     CompactionInfoStruct lci = response.getCompactions().get(0);
+    assertEquals("Expecting the second succeeded compaction record", 2, lci.getId());
+    assertEquals(partitionName, lci.getPartitionname());
+    assertEquals(CompactionType.MINOR, lci.getType());
+
+    // response should contain the latest compaction
+    rqst.setLastCompactionId(1);
+    response = txnHandler.getLatestCommittedCompactionInfo(rqst);
+    assertNotNull(response);
+    assertEquals("Expecting a single record", 1, response.getCompactionsSize());
+    lci = response.getCompactions().get(0);
     assertEquals("Expecting the second succeeded compaction record", 2, lci.getId());
     assertEquals(partitionName, lci.getPartitionname());
     assertEquals(CompactionType.MINOR, lci.getType());

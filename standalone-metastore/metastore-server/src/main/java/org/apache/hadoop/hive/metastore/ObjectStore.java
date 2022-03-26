@@ -23,6 +23,7 @@ import static org.apache.hadoop.hive.metastore.utils.MetaStoreUtils.getDefaultCa
 import static org.apache.hadoop.hive.metastore.utils.StringUtils.normalizeIdentifier;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.net.InetAddress;
 import java.net.URI;
 import java.nio.ByteBuffer;
@@ -35,6 +36,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -52,6 +54,8 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
 import javax.jdo.JDODataStoreException;
@@ -63,6 +67,8 @@ import javax.jdo.Transaction;
 import javax.jdo.datastore.JDOConnection;
 import javax.jdo.identity.IntIdentity;
 
+import com.google.common.base.Supplier;
+import com.google.common.util.concurrent.Striped;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -186,7 +192,6 @@ import org.apache.hadoop.hive.metastore.api.WMResourcePlanStatus;
 import org.apache.hadoop.hive.metastore.api.WMTrigger;
 import org.apache.hadoop.hive.metastore.api.WMValidateResourcePlanResponse;
 import org.apache.hadoop.hive.metastore.api.WriteEventInfo;
-import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars;
 import org.apache.hadoop.hive.metastore.metrics.Metrics;
@@ -333,6 +338,8 @@ public class ObjectStore implements RawStore, Configurable {
   private Counter directSqlErrors;
   private boolean areTxnStatsSupported = false;
 
+  private static Striped<Lock> tablelocks;
+
   public ObjectStore() {
   }
 
@@ -389,6 +396,15 @@ public class ObjectStore implements RawStore, Configurable {
       throw new RuntimeException("Unable to create persistence manager. Check log for details");
     } else {
       LOG.debug("Initialized ObjectStore");
+    }
+
+    if (tablelocks == null) {
+      synchronized (ObjectStore.class) {
+        if (tablelocks == null) {
+          int numTableLocks = MetastoreConf.getIntVar(conf, ConfVars.METASTORE_NUM_STRIPED_TABLE_LOCKS);
+          tablelocks = Striped.lazyWeakLock(numTableLocks);
+        }
+      }
     }
   }
 
@@ -2567,6 +2583,11 @@ public class ObjectStore implements RawStore, Configurable {
       List<MTablePrivilege> tabGrants = null;
       List<MTableColumnPrivilege> tabColumnGrants = null;
       MTable table = this.getMTable(catName, dbName, tblName);
+      if (table == null) {
+        throw new InvalidObjectException("Unable to add partitions because "
+            + TableName.getQualified(catName, dbName, tblName) +
+            " does not exist");
+      }
       if ("TRUE".equalsIgnoreCase(table.getParameters().get("PARTITION_LEVEL_PRIVILEGE"))) {
         tabGrants = this.listAllTableGrants(catName, dbName, tblName);
         tabColumnGrants = this.listTableAllColumnGrants(catName, dbName, tblName);
@@ -2635,6 +2656,11 @@ public class ObjectStore implements RawStore, Configurable {
       List<MTablePrivilege> tabGrants = null;
       List<MTableColumnPrivilege> tabColumnGrants = null;
       MTable table = this.getMTable(catName, dbName, tblName);
+      if (table == null) {
+        throw new InvalidObjectException("Unable to add partitions because "
+            + TableName.getQualified(catName, dbName, tblName) +
+            " does not exist");
+      }
       if ("TRUE".equalsIgnoreCase(table.getParameters().get("PARTITION_LEVEL_PRIVILEGE"))) {
         tabGrants = this.listAllTableGrants(catName, dbName, tblName);
         tabColumnGrants = this.listTableAllColumnGrants(catName, dbName, tblName);
@@ -2695,6 +2721,11 @@ public class ObjectStore implements RawStore, Configurable {
       openTransaction();
       String catName = part.isSetCatName() ? part.getCatName() : getDefaultCatalog(conf);
       MTable table = this.getMTable(catName, part.getDbName(), part.getTableName());
+      if (table == null) {
+        throw new InvalidObjectException("Unable to add partition because "
+            + TableName.getQualified(catName, part.getDbName(), part.getTableName()) +
+            " does not exist");
+      }
       List<MTablePrivilege> tabGrants = null;
       List<MTableColumnPrivilege> tabColumnGrants = null;
       if ("TRUE".equalsIgnoreCase(table.getParameters().get("PARTITION_LEVEL_PRIVILEGE"))) {
@@ -2757,6 +2788,11 @@ public class ObjectStore implements RawStore, Configurable {
     try {
       openTransaction();
       MTable table = this.getMTable(catName, dbName, tableName);
+      if (table == null) {
+        throw new NoSuchObjectException("Unable to get partition because "
+            + TableName.getQualified(catName, dbName, tableName) +
+            " does not exist");
+      }
       MPartition mpart = getMPartition(catName, dbName, tableName, part_vals, table);
       part = convertToPart(mpart, false);
       committed = commitTransaction();
@@ -5152,6 +5188,10 @@ public class ObjectStore implements RawStore, Configurable {
       openTransaction();
 
       MTable table = this.getMTable(catName, dbName, tblName);
+      if (table == null) {
+        throw new NoSuchObjectException(
+            TableName.getQualified(catName, dbName, tblName) + " table not found");
+      }
       List<String> partNames = new ArrayList<>();
       for (List<String> partVal : part_vals) {
         partNames.add(
@@ -9681,18 +9721,19 @@ public class ObjectStore implements RawStore, Configurable {
     }
     return statsMap;
   }
-
+  
   @Override
-  public Map<String, String> updateTableColumnStatistics(ColumnStatistics colStats,
-      String validWriteIds, long writeId)
-    throws NoSuchObjectException, MetaException, InvalidObjectException, InvalidInputException {
+  public Map<String, String> updateTableColumnStatistics(ColumnStatistics colStats, String validWriteIds, long writeId)
+      throws NoSuchObjectException, MetaException, InvalidObjectException, InvalidInputException {
     boolean committed = false;
 
-    openTransaction();
+    List<ColumnStatisticsObj> statsObjs = colStats.getStatsObj();
+    ColumnStatisticsDesc statsDesc = colStats.getStatsDesc();
+    
+    Lock tableLock = getTableLockFor(statsDesc.getDbName(), statsDesc.getTableName());
+    tableLock.lock();
     try {
-      List<ColumnStatisticsObj> statsObjs = colStats.getStatsObj();
-      ColumnStatisticsDesc statsDesc = colStats.getStatsDesc();
-
+      openTransaction();
       // DataNucleus objects get detached all over the place for no (real) reason.
       // So let's not use them anywhere unless absolutely necessary.
       String catName = statsDesc.isSetCatName() ? statsDesc.getCatName() : getDefaultCatalog(conf);
@@ -9705,10 +9746,10 @@ public class ObjectStore implements RawStore, Configurable {
 
       Map<String, MTableColumnStatistics> oldStats = getPartitionColStats(table, colNames, colStats.getEngine());
 
-      for (ColumnStatisticsObj statsObj:statsObjs) {
+      for (ColumnStatisticsObj statsObj : statsObjs) {
         MTableColumnStatistics mStatsObj = StatObjectConverter.convertToMTableColumnStatistics(
-            mTable, statsDesc,
-            statsObj, colStats.getEngine());
+          mTable, statsDesc,
+          statsObj, colStats.getEngine());
         writeMTableColumnStatistics(table, mStatsObj, oldStats.get(statsObj.getColName()));
         // There is no need to add colname again, otherwise we will get duplicate colNames.
       }
@@ -9727,7 +9768,7 @@ public class ObjectStore implements RawStore, Configurable {
           StatsSetupConst.setBasicStatsState(newParams, StatsSetupConst.FALSE);
         } else {
           String errorMsg = verifyStatsChangeCtx(TableName.getDbTable(dbname, name),
-              oldt.getParameters(), newParams, writeId, validWriteIds, true);
+            oldt.getParameters(), newParams, writeId, validWriteIds, true);
           if (errorMsg != null) {
             throw new MetaException(errorMsg);
           }
@@ -9735,7 +9776,7 @@ public class ObjectStore implements RawStore, Configurable {
             // Make sure we set the flag to invalid regardless of the current value.
             StatsSetupConst.setBasicStatsState(newParams, StatsSetupConst.FALSE);
             LOG.info("Removed COLUMN_STATS_ACCURATE from the parameters of the table "
-                + dbname + "." + name);
+              + dbname + "." + name);
           }
           oldt.setWriteId(writeId);
         }
@@ -9746,10 +9787,18 @@ public class ObjectStore implements RawStore, Configurable {
       // TODO: similar to update...Part, this used to do "return committed;"; makes little sense.
       return committed ? newParams : null;
     } finally {
-      if (!committed) {
-        rollbackTransaction();
+      try {
+        if (!committed) {
+          rollbackTransaction();
+        }
+      } finally {
+        tableLock.unlock();
       }
     }
+  }
+
+  private Lock getTableLockFor(String dbName, String tblName) {
+    return tablelocks.get(dbName + "." + tblName);
   }
 
   /**
@@ -9997,6 +10046,9 @@ public class ObjectStore implements RawStore, Configurable {
     Boolean isCompliant = null;
     if (writeIdList != null) {
       MTable table = this.getMTable(catName, dbName, tableName);
+      if (table == null) {
+        throw new NoSuchObjectException(TableName.getQualified(catName, dbName, tableName) + " table not found");
+      }
       isCompliant = !TxnUtils.isTransactionalTable(table.getParameters())
         || (areTxnStatsSupported && isCurrentStatsValidForTheQuery(table, writeIdList, false));
     }
