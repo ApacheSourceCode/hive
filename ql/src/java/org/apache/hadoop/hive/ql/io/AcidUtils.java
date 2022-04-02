@@ -1323,7 +1323,7 @@ public class AcidUtils {
    * @return the state of the directory
    * @throws IOException on filesystem errors
    */
-  private static AcidDirectory getAcidState(FileSystem fileSystem, Path candidateDirectory, Configuration conf,
+  public static AcidDirectory getAcidState(FileSystem fileSystem, Path candidateDirectory, Configuration conf,
       ValidWriteIdList writeIdList, Ref<Boolean> useFileIds, boolean ignoreEmptyFiles, Map<Path,
       HdfsDirSnapshot> dirSnapshots) throws IOException {
     ValidTxnList validTxnList = getValidTxnList(conf);
@@ -2529,6 +2529,9 @@ public class AcidUtils {
         LOG.debug("isRawFormat() called on " + dataFile + " which is not an ORC file: " +
             ex.getMessage());
         return true;
+      } catch (FileNotFoundException ex) {
+        //Fallback in case file was already removed and used Snapshot is outdated
+        return false;
       }
     }
   }
@@ -3151,7 +3154,8 @@ public class AcidUtils {
       .noneMatch(pattern -> astSearcher.simpleBreadthFirstSearch(tree, pattern) != null));
   }
 
-  private static void initDirCache(int durationInMts) {
+  @VisibleForTesting
+  public static void initDirCache(int durationInMts) {
     if (dirCacheInited.get()) {
       LOG.debug("DirCache got initialized already");
       return;
@@ -3249,6 +3253,20 @@ public class AcidUtils {
       printDirCacheEntries();
     }
     return value.getDirInfo();
+  }
+
+  public static void tryInvalidateDirCache(org.apache.hadoop.hive.metastore.api.Table table) {
+    if (dirCacheInited.get()) {
+      String key = getFullTableName(table.getDbName(), table.getTableName()) + "_" + table.getSd().getLocation();
+      boolean partitioned = table.getPartitionKeys() != null && !table.getPartitionKeys().isEmpty();
+      if (!partitioned) {
+        dirCache.invalidate(key);
+      } else {
+        // Invalidate all partitions as the difference in the key is only the partition part at the end of the path.
+        dirCache.invalidateAll(
+          dirCache.asMap().keySet().stream().filter(k -> k.startsWith(key)).collect(Collectors.toSet()));
+      }
+    }
   }
 
   static class DirInfoValue {

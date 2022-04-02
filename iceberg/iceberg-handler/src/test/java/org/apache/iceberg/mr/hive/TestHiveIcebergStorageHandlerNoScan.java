@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.StatsSetupConst;
+import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.EnvironmentContext;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
@@ -408,6 +409,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
         "'" + InputFormatConfig.PARTITION_SPEC + "'='" +
         PartitionSpecParser.toJson(PartitionSpec.unpartitioned()) + "', " +
         "'dummy'='test', " +
+        "'" + InputFormatConfig.EXTERNAL_TABLE_PURGE + "'='TRUE', " +
         "'" + InputFormatConfig.CATALOG_NAME + "'='" + testTables.catalogName() + "')");
 
     // Check the Iceberg table data
@@ -465,7 +467,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
         " last_name STRING COMMENT 'This is last name')" +
         " STORED BY ICEBERG " +
         testTables.locationForCreateTableSQL(identifier) +
-        testTables.propertiesForCreateTableSQL(ImmutableMap.of());
+        testTables.propertiesForCreateTableSQL(ImmutableMap.of(InputFormatConfig.EXTERNAL_TABLE_PURGE, "TRUE"));
     shell.executeStatement(createSql);
 
     Table icebergTable = testTables.loadTable(identifier);
@@ -784,7 +786,8 @@ public class TestHiveIcebergStorageHandlerNoScan {
       shell.executeStatement("CREATE EXTERNAL TABLE not_supported_types (not_supported " + notSupportedType + ") " +
               "STORED BY ICEBERG " +
               testTables.locationForCreateTableSQL(identifier) +
-              testTables.propertiesForCreateTableSQL(ImmutableMap.of()));
+              testTables.propertiesForCreateTableSQL(
+                  ImmutableMap.of(InputFormatConfig.EXTERNAL_TABLE_PURGE, "TRUE")));
 
       org.apache.iceberg.Table icebergTable = testTables.loadTable(identifier);
       Assert.assertEquals(notSupportedTypes.get(notSupportedType), icebergTable.schema().columns().get(0).type());
@@ -793,7 +796,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
   }
 
   @Test
-  public void testCreateTableWithColumnComments() {
+  public void testCreateTableWithColumnComments() throws InterruptedException, TException {
     TableIdentifier identifier = TableIdentifier.of("default", "comment_table");
     shell.executeStatement("CREATE EXTERNAL TABLE comment_table (" +
         "t_int INT COMMENT 'int column',  " +
@@ -809,8 +812,12 @@ public class TestHiveIcebergStorageHandlerNoScan {
     for (int i = 0; i < icebergTable.schema().columns().size(); i++) {
       Types.NestedField field = icebergTable.schema().columns().get(i);
       Assert.assertArrayEquals(new Object[] {field.name(), HiveSchemaUtil.convert(field.type()).getTypeName(),
-          field.doc() != null ? field.doc() : "from deserializer"}, rows.get(i));
+          field.doc() != null ? field.doc() : ""}, rows.get(i));
     }
+
+    // Check the columns directly
+    List<FieldSchema> cols = shell.metastore().getTable(identifier).getSd().getCols();
+    Assert.assertEquals(icebergTable.schema().asStruct(), HiveSchemaUtil.convert(cols).asStruct());
   }
 
   @Test
@@ -829,8 +836,8 @@ public class TestHiveIcebergStorageHandlerNoScan {
     for (int i = 0; i < icebergTable.schema().columns().size(); i++) {
       Types.NestedField field = icebergTable.schema().columns().get(i);
       Assert.assertNull(field.doc());
-      Assert.assertArrayEquals(new Object[] {field.name(), HiveSchemaUtil.convert(field.type()).getTypeName(),
-          "from deserializer"}, rows.get(i));
+      Assert.assertArrayEquals(new Object[] {field.name(), HiveSchemaUtil.convert(field.type()).getTypeName(), ""},
+          rows.get(i));
     }
   }
 
@@ -855,7 +862,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
     for (int i = 0; i < columns.size(); i++) {
       Types.NestedField field = columns.get(i);
       Assert.assertArrayEquals(new Object[] {field.name(), HiveSchemaUtil.convert(field.type()).getTypeName(),
-          field.doc() != null ? field.doc() : "from deserializer"}, rows.get(i));
+          field.doc() != null ? field.doc() : ""}, rows.get(i));
       Assert.assertEquals(expectedDoc[i], field.doc());
     }
   }
@@ -932,9 +939,8 @@ public class TestHiveIcebergStorageHandlerNoScan {
     Assert.assertEquals(expectedIcebergProperties, icebergTable.properties());
 
     if (Catalogs.hiveCatalog(shell.getHiveConf(), tableProperties)) {
-      Assert.assertEquals(10, hmsParams.size());
+      Assert.assertEquals(9, hmsParams.size());
       Assert.assertEquals("initial_val", hmsParams.get("custom_property"));
-      Assert.assertEquals("TRUE", hmsParams.get(InputFormatConfig.EXTERNAL_TABLE_PURGE));
       Assert.assertEquals("TRUE", hmsParams.get("EXTERNAL"));
       Assert.assertEquals("true", hmsParams.get(TableProperties.ENGINE_HIVE_ENABLED));
       Assert.assertEquals(HiveIcebergStorageHandler.class.getName(),
@@ -947,7 +953,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
       Assert.assertNotNull(hmsParams.get(hive_metastoreConstants.DDL_TIME));
       Assert.assertNotNull(hmsParams.get(serdeConstants.SERIALIZATION_FORMAT));
     } else {
-      Assert.assertEquals(7, hmsParams.size());
+      Assert.assertEquals(6, hmsParams.size());
       Assert.assertNull(hmsParams.get(TableProperties.ENGINE_HIVE_ENABLED));
     }
 
@@ -970,7 +976,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
         .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
     if (Catalogs.hiveCatalog(shell.getHiveConf(), tableProperties)) {
-      Assert.assertEquals(13, hmsParams.size()); // 2 newly-added properties + previous_metadata_location prop
+      Assert.assertEquals(12, hmsParams.size()); // 2 newly-added properties + previous_metadata_location prop
       Assert.assertEquals("true", hmsParams.get("new_prop_1"));
       Assert.assertEquals("false", hmsParams.get("new_prop_2"));
       Assert.assertEquals("new_val", hmsParams.get("custom_property"));
@@ -980,7 +986,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
       Assert.assertEquals(hmsParams.get(BaseMetastoreTableOperations.PREVIOUS_METADATA_LOCATION_PROP), prevSnapshot);
       Assert.assertEquals(hmsParams.get(BaseMetastoreTableOperations.METADATA_LOCATION_PROP), newSnapshot);
     } else {
-      Assert.assertEquals(7, hmsParams.size());
+      Assert.assertEquals(6, hmsParams.size());
     }
 
     // Remove some Iceberg props and see if they're removed from HMS table props as well
@@ -1050,6 +1056,69 @@ public class TestHiveIcebergStorageHandlerNoScan {
         HiveIcebergStorageHandlerTestUtils.CUSTOMER_RECORDS);
 
     shell.executeStatement("DROP TABLE customers");
+  }
+
+  @Test
+  public void testDropTableWithPurgeFalse() throws IOException, TException, InterruptedException {
+    TableIdentifier identifier = TableIdentifier.of("default", "customers");
+
+    shell.executeStatement("CREATE EXTERNAL TABLE customers (t_int INT, t_string STRING) STORED BY ICEBERG " +
+        testTables.locationForCreateTableSQL(identifier) +
+        testTables.propertiesForCreateTableSQL(ImmutableMap.of(InputFormatConfig.EXTERNAL_TABLE_PURGE, "FALSE")));
+
+    String purge = shell.metastore().getTable(identifier).getParameters().get(InputFormatConfig.EXTERNAL_TABLE_PURGE);
+    Assert.assertEquals("FALSE", purge);
+    org.apache.iceberg.Table icebergTable = testTables.loadTable(identifier);
+    Path tableLocation = new Path(icebergTable.location());
+    shell.executeStatement("DROP TABLE customers");
+
+    // Check if the files are kept
+    FileSystem fs = Util.getFs(tableLocation, shell.getHiveConf());
+    Assert.assertEquals(1, fs.listStatus(tableLocation).length);
+    Assert.assertTrue(fs.listStatus(new Path(tableLocation, "metadata")).length > 0);
+  }
+
+  @Test
+  public void testDropTableWithPurgeTrue() throws IOException, TException, InterruptedException {
+    TableIdentifier identifier = TableIdentifier.of("default", "customers");
+
+    shell.executeStatement("CREATE EXTERNAL TABLE customers (t_int INT, t_string STRING) STORED BY ICEBERG " +
+        testTables.locationForCreateTableSQL(identifier) +
+        testTables.propertiesForCreateTableSQL(ImmutableMap.of(InputFormatConfig.EXTERNAL_TABLE_PURGE, "TRUE")));
+
+    String purge = shell.metastore().getTable(identifier).getParameters().get(InputFormatConfig.EXTERNAL_TABLE_PURGE);
+    Assert.assertEquals("TRUE", purge);
+    org.apache.iceberg.Table icebergTable = testTables.loadTable(identifier);
+    Path tableLocation = new Path(icebergTable.location());
+    shell.executeStatement("DROP TABLE customers");
+
+    // Check if the files are kept
+    FileSystem fs = Util.getFs(tableLocation, shell.getHiveConf());
+    Assert.assertFalse(fs.exists(tableLocation));
+  }
+
+  @Test
+  public void testDropTableWithoutPurge() throws IOException, TException, InterruptedException {
+    TableIdentifier identifier = TableIdentifier.of("default", "customers");
+
+    shell.executeStatement("CREATE EXTERNAL TABLE customers (t_int INT, t_string STRING) STORED BY ICEBERG " +
+        testTables.locationForCreateTableSQL(identifier) +
+        testTables.propertiesForCreateTableSQL(ImmutableMap.of()));
+
+    String purge = shell.metastore().getTable(identifier).getParameters().get(InputFormatConfig.EXTERNAL_TABLE_PURGE);
+    Assert.assertNull(purge);
+    org.apache.iceberg.Table icebergTable = testTables.loadTable(identifier);
+    Path tableLocation = new Path(icebergTable.location());
+    shell.executeStatement("DROP TABLE customers");
+
+    FileSystem fs = Util.getFs(tableLocation, shell.getHiveConf());
+    // This comes from the default Hive behavior based on hive.external.table.purge.default
+    if (HiveConf.getBoolVar(shell.getHiveConf(), HiveConf.ConfVars.HIVE_EXTERNALTABLE_PURGE_DEFAULT)) {
+      Assert.assertFalse(fs.exists(tableLocation));
+    } else {
+      Assert.assertEquals(1, fs.listStatus(tableLocation).length);
+      Assert.assertTrue(fs.listStatus(new Path(tableLocation, "metadata")).length > 0);
+    }
   }
 
   @Test
@@ -1172,8 +1241,12 @@ public class TestHiveIcebergStorageHandlerNoScan {
     );
     testTables.createTable(shell, identifier.name(), schema, SPEC, FileFormat.PARQUET, ImmutableList.of());
 
+    // Run some alter commands. Before the fix the alter changed the column comment, and we would like to check
+    // that this is fixed now.
+    shell.executeStatement("ALTER TABLE default.customers CHANGE COLUMN customer_id customer_id bigint");
+
     shell.executeStatement("ALTER TABLE default.customers REPLACE COLUMNS " +
-        "(customer_id int, last_name string COMMENT 'This is last name', " +
+        "(customer_id bigint, last_name string COMMENT 'This is last name', " +
         "address struct<city:string,street:string>)");
 
     org.apache.iceberg.Table icebergTable = testTables.loadTable(identifier);
@@ -1183,7 +1256,7 @@ public class TestHiveIcebergStorageHandlerNoScan {
     List<FieldSchema> hmsSchema = hmsTable.getSd().getCols();
 
     List<FieldSchema> expectedSchema = Lists.newArrayList(
-        new FieldSchema("customer_id", "int", null),
+        new FieldSchema("customer_id", "bigint", null),
         // first_name column is dropped
         new FieldSchema("last_name", "string", "This is last name"),
         new FieldSchema("address", "struct<city:string,street:string>", null));
@@ -1265,9 +1338,6 @@ public class TestHiveIcebergStorageHandlerNoScan {
         new FieldSchema("family_name", "string", "This is family name"));
 
     Assert.assertEquals(expectedSchema, icebergSchema);
-    if (testTableType != TestTables.TestTableType.HIVE_CATALOG) {
-      expectedSchema.stream().filter(fs -> fs.getComment() == null).forEach(fs -> fs.setComment("from deserializer"));
-    }
     Assert.assertEquals(expectedSchema, hmsSchema);
   }
 
@@ -1295,9 +1365,6 @@ public class TestHiveIcebergStorageHandlerNoScan {
         new FieldSchema("last_name", "string", "This is last name"));
 
     Assert.assertEquals(expectedSchema, icebergSchema);
-    if (testTableType != TestTables.TestTableType.HIVE_CATALOG) {
-      expectedSchema.stream().filter(fs -> fs.getComment() == null).forEach(fs -> fs.setComment("from deserializer"));
-    }
     Assert.assertEquals(expectedSchema, hmsSchema);
   }
 
@@ -1378,11 +1445,6 @@ public class TestHiveIcebergStorageHandlerNoScan {
         new FieldSchema("newstringcol", "string", "Column with description"));
 
     Assert.assertEquals(expectedSchema, icebergSchema);
-
-    if (testTableType != TestTables.TestTableType.HIVE_CATALOG) {
-      expectedSchema.get(0).setComment("from deserializer");
-    }
-
     Assert.assertEquals(expectedSchema, hmsSchema);
   }
 
