@@ -625,6 +625,9 @@ public class MetastoreConf {
             "hive.compactor.cleaner.retry.retentionTime", 300, TimeUnit.SECONDS, new TimeValidator(TimeUnit.SECONDS),
             "Initial value of the cleaner retry retention time. The delay has a backoff, and calculated the following way: " +
             "pow(2, number_of_failed_attempts) * HIVE_COMPACTOR_CLEANER_RETRY_RETENTION_TIME."),
+    HIVE_COMPACTOR_CONNECTION_POOLING_MAX_CONNECTIONS("metastore.compactor.connectionPool.maxPoolSize",
+            "hive.compactor.connectionPool.maxPoolSize", 10,
+            "Specify the maximum number of connections in the connection pool used by the compactor."),
     CONNECTION_DRIVER("javax.jdo.option.ConnectionDriverName",
         "javax.jdo.option.ConnectionDriverName", "org.apache.derby.jdbc.EmbeddedDriver",
         "Driver class name for a JDBC metastore"),
@@ -1916,7 +1919,7 @@ public class MetastoreConf {
        * this 'if' is pretty lame - QTestUtil.QTestUtil() uses hiveSiteURL to load a specific
        * hive-site.xml from data/conf/<subdir> so this makes it follow the same logic - otherwise
        * HiveConf and MetastoreConf may load different hive-site.xml  ( For example,
-       * HiveConf uses data/conf/spark/hive-site.xml and MetastoreConf data/conf/hive-site.xml)
+       * HiveConf uses data/conf/tez/hive-site.xml and MetastoreConf data/conf/hive-site.xml)
        */
       hiveSiteURL = findConfigFile(classLoader, "hive-site.xml");
     }
