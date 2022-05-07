@@ -206,14 +206,12 @@ public class WriteEntity extends Entity implements Serializable {
    */
   public static WriteType determineAlterTableWriteType(AlterTableType op, Table table, HiveConf conf) {
     switch (op) {
-    case RENAME_COLUMN:
     case CLUSTERED_BY:
     case NOT_SORTED:
     case NOT_CLUSTERED:
     case SET_FILE_FORMAT:
     case SET_SERDE:
     case DROPPROPS:
-    case REPLACE_COLUMNS:
     case ARCHIVE:
     case UNARCHIVE:
     case ALTERLOCATION:
@@ -223,14 +221,16 @@ public class WriteEntity extends Entity implements Serializable {
     case SET_SKEWED_LOCATION:
     case INTO_BUCKETS:
     case ALTERPARTITION:
-    case ADDCOLS:
     case TRUNCATE:
     case MERGEFILES:
-    case ADD_CONSTRAINT:
-    case DROP_CONSTRAINT:
     case OWNER:
       return WriteType.DDL_EXCLUSIVE;
 
+    case ADDCOLS:
+    case REPLACE_COLUMNS:
+    case RENAME_COLUMN:
+    case ADD_CONSTRAINT: 
+    case DROP_CONSTRAINT:
     case RENAME:
       return AcidUtils.isLocklessReadsEnabled(table, conf) ? 
           WriteType.DDL_EXCL_WRITE : WriteType.DDL_EXCLUSIVE;
