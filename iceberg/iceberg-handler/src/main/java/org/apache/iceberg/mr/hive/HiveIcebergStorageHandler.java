@@ -53,6 +53,7 @@ import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.HiveStoragePredicateHandler;
 import org.apache.hadoop.hive.ql.metadata.VirtualColumn;
+import org.apache.hadoop.hive.ql.parse.AlterTableExecuteSpec;
 import org.apache.hadoop.hive.ql.parse.PartitionTransformSpec;
 import org.apache.hadoop.hive.ql.parse.SemanticException;
 import org.apache.hadoop.hive.ql.plan.DynamicPartitionCtx;
@@ -353,11 +354,12 @@ public class HiveIcebergStorageHandler implements HiveStoragePredicateHandler, H
   }
 
   @Override
-  public DynamicPartitionCtx createDPContext(HiveConf hiveConf, org.apache.hadoop.hive.ql.metadata.Table hmsTable)
+  public DynamicPartitionCtx createDPContext(
+          HiveConf hiveConf, org.apache.hadoop.hive.ql.metadata.Table hmsTable, Operation writeOperation)
       throws SemanticException {
     // delete records are already clustered by partition spec id and the hash of the partition struct
     // there is no need to do any additional sorting based on partition columns
-    if (getOperationType().equals(Operation.DELETE.name())) {
+    if (writeOperation == Operation.DELETE) {
       return null;
     }
 
@@ -382,7 +384,7 @@ public class HiveIcebergStorageHandler implements HiveStoragePredicateHandler, H
       fieldOrderMap.put(fields.get(i).name(), i);
     }
 
-    int offset = acidSelectColumns(hmsTable, Operation.valueOf(getOperationType())).size();
+    int offset = acidSelectColumns(hmsTable, writeOperation).size();
     for (PartitionTransformSpec spec : partitionTransformSpecs) {
       int order = fieldOrderMap.get(spec.getColumnName());
       if (PartitionTransformSpec.TransformType.BUCKET.equals(spec.getTransformType())) {
@@ -448,6 +450,27 @@ public class HiveIcebergStorageHandler implements HiveStoragePredicateHandler, H
   @Override
   public boolean isMetadataTableSupported() {
     return true;
+  }
+
+  @Override
+  public void executeOperation(org.apache.hadoop.hive.ql.metadata.Table hmsTable, AlterTableExecuteSpec executeSpec) {
+    switch (executeSpec.getOperationType()) {
+      case ROLLBACK:
+        TableDesc tableDesc = Utilities.getTableDesc(hmsTable);
+        Table icebergTable = IcebergTableUtil.getTable(conf, tableDesc.getProperties());
+        LOG.info("Executing rollback operation on iceberg table. If you would like to revert rollback you could " +
+              "try altering the metadata location to the current metadata location by executing the following query:" +
+              "ALTER TABLE {}.{} SET TBLPROPERTIES('metadata_location'='{}'). This operation is supported for Hive " +
+              "Catalog tables.", hmsTable.getDbName(), hmsTable.getTableName(),
+            ((BaseTable) icebergTable).operations().current().metadataFileLocation());
+        AlterTableExecuteSpec.RollbackSpec rollbackSpec =
+            (AlterTableExecuteSpec.RollbackSpec) executeSpec.getOperationParams();
+        IcebergTableUtil.rollback(icebergTable, rollbackSpec.getRollbackType(), rollbackSpec.getParam());
+        break;
+      default:
+        throw new UnsupportedOperationException(
+            String.format("Operation type %s is not supported", executeSpec.getOperationType().name()));
+    }
   }
 
   @Override
@@ -571,15 +594,6 @@ public class HiveIcebergStorageHandler implements HiveStoragePredicateHandler, H
     // There is nothing to prune, or we could not use the filter
     LOG.debug("Not found Iceberg partition columns to prune with predicate {}", syntheticFilterPredicate);
     return false;
-  }
-
-  public static Operation operation(Configuration conf, String tableName) {
-    if (conf == null || tableName == null) {
-      return null;
-    }
-
-    String operation = conf.get(InputFormatConfig.OPERATION_TYPE_PREFIX + tableName);
-    return operation == null ? null : Operation.valueOf(operation);
   }
 
   /**
@@ -781,15 +795,28 @@ public class HiveIcebergStorageHandler implements HiveStoragePredicateHandler, H
    *   <li>iceberg format-version is "2"</li>
    *   <li>fileformat is set to avro</li>
    *   <li>querying metadata tables</li>
+   *   <li>fileformat is set to ORC, and table schema has time type column</li>
    * </ul>
    * @param tableProps table properties, must be not null
    */
   private void fallbackToNonVectorizedModeBasedOnProperties(Properties tableProps) {
     if ("2".equals(tableProps.get(TableProperties.FORMAT_VERSION)) ||
         FileFormat.AVRO.name().equalsIgnoreCase(tableProps.getProperty(TableProperties.DEFAULT_FILE_FORMAT)) ||
-        (tableProps.containsKey("metaTable") && isValidMetadataTable(tableProps.getProperty("metaTable")))) {
+        (tableProps.containsKey("metaTable") && isValidMetadataTable(tableProps.getProperty("metaTable"))) ||
+        hasOrcTimeInSchema(tableProps)) {
       conf.setBoolean(HiveConf.ConfVars.HIVE_VECTORIZATION_ENABLED.varname, false);
     }
+  }
+
+  // Iceberg Time type columns are written as longs into ORC files. There is no Time type in Hive, so it is represented
+  // as String instead. For ORC there's no automatic conversion from long to string during vectorized reading such as
+  // for example in Parquet (in Parquet files Time type is an int64 with 'time' logical annotation).
+  private static boolean hasOrcTimeInSchema(Properties tableProps) {
+    if (!FileFormat.ORC.name().equalsIgnoreCase(tableProps.getProperty(TableProperties.DEFAULT_FILE_FORMAT))) {
+      return false;
+    }
+    Schema tableSchema = SchemaParser.fromJson(tableProps.getProperty(InputFormatConfig.TABLE_SCHEMA));
+    return tableSchema.columns().stream().anyMatch(f -> Types.TimeType.get().typeId() == f.type().typeId());
   }
 
   /**

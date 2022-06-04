@@ -1683,6 +1683,9 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
               && ch.getChild(0) instanceof ASTNode) {
             ch = (ASTNode) ch.getChild(0);
             isTmpFileDest = ch.getToken().getType() == HiveParser.TOK_TMP_FILE;
+            if (ch.getToken().getType() == HiveParser.StringLiteral) {
+              qbp.setInsertOverwriteDirectory(true);
+            }
           } else {
             if (ast.getToken().getType() == HiveParser.TOK_DESTINATION
                 && ast.getChild(0).getType() == HiveParser.TOK_TAB) {
@@ -8128,6 +8131,7 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
                                           RowSchema fsRS, boolean canBeMerged, Table dest_tab, Long mmWriteId, boolean isMmCtas,
                                           Integer dest_type, QB qb, boolean isDirectInsert, AcidUtils.Operation acidOperation, String moveTaskId) throws SemanticException {
     boolean isInsertOverwrite = false;
+    Context.Operation writeOperation = getWriteOperation(dest);
     switch (dest_type) {
     case QBMetaData.DEST_PARTITION:
       //fall through
@@ -8143,7 +8147,7 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
       // Some non-native tables might be partitioned without partition spec information being present in the Table object
       HiveStorageHandler storageHandler = dest_tab.getStorageHandler();
       if (storageHandler != null && storageHandler.alwaysUnpartitioned()) {
-        DynamicPartitionCtx nonNativeDpCtx = storageHandler.createDPContext(conf, dest_tab);
+        DynamicPartitionCtx nonNativeDpCtx = storageHandler.createDPContext(conf, dest_tab, writeOperation);
         if (dpCtx == null && nonNativeDpCtx != null) {
           dpCtx = nonNativeDpCtx;
         }
@@ -8183,6 +8187,8 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
       fileSinkDesc.setWriteType(wt);
       acidFileSinks.add(fileSinkDesc);
     }
+
+    fileSinkDesc.setWriteOperation(writeOperation);
 
     fileSinkDesc.setTemporary(destTableIsTemporary);
     fileSinkDesc.setMaterialization(destTableIsMaterialization);
@@ -11475,19 +11481,18 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
             TypeInfoFactory.getPrimitiveTypeInfo(part_col.getType()), alias, true));
       }
 
+      // put virtual columns into RowResolver.
       List<VirtualColumn> vcList = new ArrayList<>();
-      boolean nonNativeAcid = AcidUtils.isNonNativeAcidTable(tab);
-      boolean isUpdateDelete = this instanceof UpdateDeleteSemanticAnalyzer;
-      // put all virtual columns in RowResolver.
-      if (!tab.isNonNative() || (nonNativeAcid && isUpdateDelete)) {
-        vcList = VirtualColumn.getRegistry(conf);
-        if (nonNativeAcid && isUpdateDelete) {
-          vcList.addAll(tab.getStorageHandler().acidVirtualColumns());
-        }
-        vcList.forEach(vc -> rwsch.put(alias, vc.getName().toLowerCase(), new ColumnInfo(vc.getName(),
-            vc.getTypeInfo(), alias, true, vc.getIsHidden()
-        )));
+      if (!tab.isNonNative()) {
+        vcList.addAll(VirtualColumn.getRegistry(conf));
       }
+      if (tab.isNonNative() && AcidUtils.isNonNativeAcidTable(tab)) {
+        vcList.addAll(tab.getStorageHandler().acidVirtualColumns());
+      }
+
+      vcList.forEach(vc -> rwsch.put(alias, vc.getName().toLowerCase(), new ColumnInfo(vc.getName(),
+              vc.getTypeInfo(), alias, true, vc.getIsHidden()
+      )));
 
       // Create the root of the operator tree
       TableScanDesc tsDesc = new TableScanDesc(alias, vcList, tab);
@@ -15015,6 +15020,12 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
             AcidUtils.Operation.INSERT);
   }
 
+  private Context.Operation getWriteOperation(String destination) {
+    return deleting(destination) ? Context.Operation.DELETE :
+        (updating(destination) ? Context.Operation.UPDATE :
+            Context.Operation.OTHER);
+  }
+
   private AcidUtils.Operation getAcidType(Class<? extends OutputFormat> of, String dest,
       boolean isMM) {
 
@@ -15229,6 +15240,9 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
       return false;
     }
     if (qb.getParseInfo().hasInsertTables()) {
+      return false;
+    }
+    if (qb.getParseInfo().isInsertOverwriteDirectory()) {
       return false;
     }
 
