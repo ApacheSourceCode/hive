@@ -245,9 +245,6 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
               String dbEventId = getReplEventIdFromDatabase(work.dbNameOrPattern, getHive());
               // Get the last replicated event id from the database with respect to target.
               String targetDbEventId = getTargetEventId(work.dbNameOrPattern, getHive());
-              // Check if the tableDiff directory is present or not.
-              boolean isTableDiffDirectoryPresent =
-                  checkFileExists(currentDumpPath, conf, TABLE_DIFF_COMPLETE_DIRECTORY);
 
               LOG.info("Creating event_ack file for database {} with event id {}.", work.dbNameOrPattern, dbEventId);
               lastReplId =
@@ -274,6 +271,8 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
               // Generate the bootstrapped table list and put it in the new dump directory for the load to consume.
               createBootstrapTableList(currentDumpPath, tablesForBootstrap, conf);
 
+              dumpDbMetadata(work.dbNameOrPattern, new Path(hiveDumpRoot, EximUtil.METADATA_PATH_NAME),
+                      fromEventId, getHive());
               // Call the normal dump with the tablesForBootstrap set.
               lastReplId =  incrementalDump(hiveDumpRoot, dmd, cmRoot, getHive());
             }
@@ -1089,9 +1088,8 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
     // of the ACID tables might be included for bootstrap during incremental dump. For old policy, its because the table
     // may not satisfying the old policy but satisfying the new policy. For filter, it may happen that the table
     // is renamed and started satisfying the policy.
-    return ((!work.replScope.includeAllTables())
-            || (previousReplScopeModified())
-            || conf.getBoolVar(HiveConf.ConfVars.REPL_BOOTSTRAP_ACID_TABLES));
+    return !work.replScope.includeAllTables() || previousReplScopeModified() || !tablesForBootstrap.isEmpty()
+            || conf.getBoolVar(HiveConf.ConfVars.REPL_BOOTSTRAP_ACID_TABLES);
   }
 
   private void dumpEvent(NotificationEvent ev, Path evRoot, Path dumpRoot, Path cmRoot, Hive db) throws Exception {
